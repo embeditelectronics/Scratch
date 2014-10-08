@@ -40,9 +40,69 @@ import pygame
 from rpisoc import *
 RPiSoC('SPI')
 
-my_delsig = ADC('DELSIG')
-my_output = DigitalOutput(2,0)
 
+#16 bit adc
+#my_delsig = ADC('DELSIG')
+
+#8 12-bit adc inputs (multiplexed sar adc) on port 3
+my_analog_pin1 = analogPin(0)
+my_analog_pin2 = analogPin(1)
+my_analog_pin3 = analogPin(2)
+my_analog_pin4 = analogPin(3)
+my_analog_pin5 = analogPin(4)
+my_analog_pin6 = analogPin(5)
+my_analog_pin7 = analogPin(6)
+my_analog_pin8 = analogPin(7)
+
+#rpisoc port 2 digital pins
+my_output1 = digitalPin(2,0,'OUT')
+my_output2 = digitalPin(2,1,'OUT')
+my_output3 = digitalPin(2,2,'OUT')
+my_output4 = digitalPin(2,3,'OUT')
+my_input1 = digitalPin(2,4,'IN')
+my_input2 = digitalPin(2,5,'IN')
+my_input3 = digitalPin(2,6,'IN')
+my_input4 = digitalPin(2,7,'IN')
+
+#rpisoc port 12 digital pins
+#p12.0 is the onboard rpisoc led
+my_output5 = digitalPin(12,0,'OUT')
+my_output6 = digitalPin(12,1,'OUT')
+my_output7 = digitalPin(12,2,'OUT')
+my_output8 = digitalPin(12,3,'OUT')
+my_input5 = digitalPin(12,4,'IN')
+my_input6 = digitalPin(12,5,'IN')
+my_input7 = digitalPin(12,6,'IN')
+my_input8 = digitalPin(12,7,'IN')
+
+#pwm on port 6[0-3]
+my_pwm1 = PWM(0)
+my_pwm2 = PWM(1)
+my_pwm3 = PWM(2)
+my_pwm4 = PWM(3)
+
+'''#my_pwm1.Start()
+my_pwm1.WritePeriod(65535)
+my_pwm1.SetDutyCycle(50)
+#my_pwm2.Start()
+my_pwm2.WritePeriod(65535)
+my_pwm2.SetDutyCycle(50)
+#my_pwm3.Start()
+my_pwm3.WritePeriod(65535)
+my_pwm3.SetDutyCycle(50)
+#my_pwm4.Start()
+my_pwm4.WritePeriod(65535)
+my_pwm4.SetDutyCycle(50)
+'''
+#vdac on p0[1]
+my_vdac = VDAC(0)
+
+#servos on port 6[4-5]
+my_servo1 = Servo(4,1.1,2.2,0,5)
+my_servo2 = Servo(5,1.2,2.2,0,5)
+
+my_servo1.Start()
+my_servo2.Start()
 
 try:
     from Adafruit_PWM_Servo_Driver import PWM
@@ -2728,25 +2788,37 @@ class ScratchListener(threading.Thread):
                     self.dataraw = origdataraw
 
 
-                    if self.bFind('digitalwritelow'):
+                    if self.bFind('Pin1Off'):
                         print "found digitallow"
                         digitalvalue = 0
-                        my_output.Write(0)
+                        my_output1.Write(0)
 
-                    if self.bFind('digitalwritehigh'):
+                    if self.bFind('Pin1On'):
                         print "found digitalhigh"
                         digitalvalue = 1
-                        my_output.Write(1)
+                        my_output1.Write(1)
+
+                    if self.bFind('Pin1Toggle'):
+                        print "found digitalhigh"
+                        digitalvalue = 1
+                        my_output1.Toggle()	
+						
+                    if self.bFind('Pin1'):
+                        print "reading pin state"
+                        pinStateR = my_output1.Read()
+                        sensor_name = 'Pin1'
+                        bcast_str = 'sensor-update "%s" %s' % (sensor_name,pinStateR)
+                        self.send_scratch_command(bcast_str)
 
                     if self.bFind('analogread'):
                         analogvalue = -1
-                        my_delsig.Start()
+                        #my_delsig.Start()
                         #sleep(0.05)
-                        adc_counts = my_delsig.Read()
-                        analogvoltage = my_delsig.CountsTo_Volts(adc_counts)
+                        analogvalue = adc_counts = my_analog_pin1.Read()
+                        analogvoltage = my_analog_pin1.ReadVolts()
                         #sleep(0.05)
-                        my_delsig.Stop()
-                        analogvalue = adc_counts
+                        #my_delsig.Stop()
+                        #analogvalue = adc_counts
                         print analogvalue
                         sensor_name = 'analogvalue'
                         bcast_str = 'sensor-update "%s" %s' % (sensor_name,analogvalue)
@@ -2754,6 +2826,21 @@ class ScratchListener(threading.Thread):
                         self.send_scratch_command(bcast_str)
                         bcast_str = 'sensor-update "%s" %s' % (sensor_name,analogvoltage)
                         self.send_scratch_command(bcast_str)
+
+                    if self.bFindValue('setservo1angle'):
+                        angle_servo1 = self.valueNumeric
+                        if angle_servo1 <= 5 and angle_servo1 >= 0:
+                            my_servo1.SetAngle(angle_servo1)
+                        print "servo1 set angle"
+                        print angle_servo1
+
+                    if self.bFindValue('setservo2angle'):
+                        angle_servo2 = self.valueNumeric
+                        if angle_servo2 <= 5 and angle_servo2 >= 0:
+                            my_servo2.SetAngle(angle_servo2)
+                        print "servo2 set angle"
+                        print angle_servo2
+                        
 
                     
                     if self.bFind('gettime'):
@@ -2995,7 +3082,7 @@ def cleanup_threads(threads):
         thread.join()
     print "Waiting for join on main threads to complete"
 
-    RPiSoC.commChannel.cleanup()
+    #RPiSoC.commChannel.cleanup()
 
     for pin in sghGC.validPins:
         try:
@@ -3215,7 +3302,7 @@ while True:
         time.sleep(0.1)
     except KeyboardInterrupt:
         print ("Keyboard Interrupt")
-        RPiSoC.commChannel.cleanup()
+        #RPiSoC.commChannel.cleanup()
         cleanup_threads((listener, sender))
         print "Thread cleanup done after disconnect"
         #time.sleep(5)

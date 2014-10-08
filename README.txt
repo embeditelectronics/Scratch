@@ -14,4 +14,10 @@ To use this follow these installation steps:
 
 4. Open up the ScratchGPIO 5 icon from the desktop and enjoy. A short tutorial for using it can be found here: http://www.embeditelectronics.com/blog/rpisoc/creating-your-first-scratch-program/
 
-I will put some example projects in this repo as well
+This scratch extension currently supports (with lots more to come):
+
+analog input
+digital i/o
+servo motor control
+
+The examples folder shows how to incorporate some of these new commands into a scratch program.
