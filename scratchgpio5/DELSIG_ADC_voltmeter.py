@@ -19,8 +19,7 @@ from rpisoc import * #import contents of rpisoc module ; includes all dependenci
 RPiSoC('SPI') #Establish connection to RPiSoC over SPI
 
 My_DELSIG  = ADC('DELSIG')
-
-out_3v3 = DigitalOutput(5,0)
+out_3v3 = digitalPin(5,0,'OUT')
 out_3v3.Write(1)
 
 try: #exception handling, not crucial but it is advised.
@@ -31,7 +30,7 @@ try: #exception handling, not crucial but it is advised.
         My_DELSIG.Stop()
 
         print('ADC OUTPUT: %d' %ADC_counts)
-        print('VOLTAGE:    %.3f' %Voltage)
+        print('VOLTAGE:    %.3f\n' %Voltage)
 
         time.sleep(.1)
 except KeyboardInterrupt:

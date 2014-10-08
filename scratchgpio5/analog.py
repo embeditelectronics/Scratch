@@ -9,6 +9,83 @@ __version__ = '1.1'
 from rpisoc import *
 from time import sleep
 
+class analogPin(object):
+    """
+    **Description:**
+        Provides functionality for use of the analog pins exposed on the RPiSoC. Define an analogPin object in the following
+        way::
+            My_analog_pin = analogPin(PIN)
+    """
+    def __init__(self, PIN):
+        """
+        **Parameters:**
+
+             - *PIN*: The analog pin number
+                    * Valid arguments are between *0* and *9*
+                    * PINs *0-7* are relative to Port 3. So PIN = 0 an analog pin on Port 3 Pin 0 (P3[0]), and PIN = 7 is on Port 3 Pin 7 (P3[7])
+                    * PIN *8* is on P0[3]
+                    * PIN *9* is on P0[7]
+        """
+
+        if int(PIN) not in range(10):
+            raise ValueError('Invalid Pin for Analog input specified. Only 10 analog inputs available.')
+        else:
+            self.pin = PIN
+
+        self.address = RPiSoC.ANALOG_IN_REGISTER
+    def Read(self):
+        """
+        **Description:**
+            Reads the specified analog pin
+        **Returns:**
+            Value in *counts* which represents the digital value after an A/D conversion on the specified pin. The voltage the is represented by the count value will depend on the resolution set by the SetResolution() method
+        """
+        cmd = 0x00
+        counts = int(RPiSoC.commChannel.receiveData((self.address, cmd, self.pin)))
+        return counts
+    def ReadVolts(self):
+        """
+        **Description:**
+            Reads the specified analog pin and converts that digital reading to a voltage in Volts.
+        **Returns:**
+            Value in *Volts* which is being applied to the specified analog pin. The resolution of the ADC does not affect this method; the conversion process accounts for the ADC resolution.
+        """
+        cmd = 0x01
+        return (float(((RPiSoC.commChannel.receiveData((self.address,cmd, self.pin)))/1000000.0)))
+    def SetOffset(self,counts):
+        """
+        **Description:**
+            Sets an offset on the ADC which is used by the CountsTo_Volts function. It will subtract the given offset before making the conversion.
+
+        **Parameters:**
+            - *offset*: ADC Value in *counts*, which will be used by the *CountsTo_Volts()* function by subtracting the given offset before making the conversion.
+
+        """
+        cmd = 0x02
+        RPiSoC.commChannel.sendData((self.address, cmd, counts))
+
+    def SetResolution(self, resolution):
+        """
+
+        **Description:**
+            - This function sets the resolution of ALL analogPin objects. The resolution is defaulted to 12.
+
+        **Parameters:**
+            - *resolution:* An integer value, in bits, that represents the new resolution of the SAR ADC.
+                * Valid entries are *8, 10, or 12.*
+
+        **Side Effects:**
+            - The ADC resolution cannot be changed during a conversion cycle. The recommended bestpractice is to stop conversions with *Stop()* before changint the resolution, and then restarting with *Start().* If you call *SetResolution()* during a conversion, the resolution will not change until the current conversion is complete. Data will not be available in the new resolution for another 6 + *resolution* clock cycles. You may need add a delay of this number of clock cycles after *SetResolution()* is called before data is valid again.
+        """
+        if resolution not in [8, 10, 12]:
+            raise ValueError('Invalid resolution specified: valid entries are 8, 10, or 12')
+
+        cmd = 0x03
+        RPiSoC.commChannel.sendData((self.address, cmd, resolution))
+
+
+
+
 class ADC(object):
     """
     **Description:**
@@ -111,7 +188,7 @@ class ADC(object):
             raise ValueError('Invalid resolution specified: valid entries are 8, 10, or 12')
 
         cmd = 0x03
-        RPiSoC.commChannel.sendData((self.address, cmd))
+        RPiSoC.commChannel.sendData((self.address, cmd, resolution))
 
     def StartConvert(self):
         """
@@ -307,6 +384,8 @@ class IDAC(object):
             print('WARNING: Attempting to initialize object at register %d which is already in use.' %self.address)
         RPiSoC.REGISTERS_IN_USE.append(self.address)
 
+        self.full_range = 2.0
+
     def Start(self):
         """
         **Description:**
@@ -377,8 +456,14 @@ class IDAC(object):
         cmd = 0x04
         if mode not in range(3):
             raise ValueError('Invalid Mode Specified:\n"0" for 32uA range\n"1" for 255uA range\n"2" for 2mA range ')
-        else:
-            RPiSoC.commChannel.sendData((self.address, cmd, mode))
+        if mode == 0:
+            self.full_range = .031875
+        elif mode == 1:
+            self.full_range = .255
+        elif mode == 2:
+            self.full_range = 2.0
+        
+        RPiSoC.commChannel.sendData((self.address, cmd, mode))
 
 
     def SetValue(self, value):
@@ -396,6 +481,24 @@ class IDAC(object):
             raise ValueError('Invalid IDAC Value: Input integer values between 0(min) and 255(max)')
 
         RPiSoC.commChannel.sendData((self.address, cmd, value))
+
+    def SetCurrent(self, amps):
+        """
+        **Description:**
+        Sets a current in milliamps to be output on the specified IDAC. Valid values depend on the chosen full scale range
+
+        **Parameters:**
+        - *amps*: number between 0 and the full scale range in milliamperes.
+        * The full scale value depends on the range, which is chosen with the SetRange() method.
+        """
+
+        if amps <= self.full_range and amps>=0:
+            digital_val = int((float(amps)/self.full_range) * 255 + 0.5)
+        else:
+            digital_val = int(255*(amps>self.full_range))
+
+        self.SetValue(digital_val)
+        
 
     def Sleep(self):
         """
@@ -441,8 +544,10 @@ class VDAC(object):
 
         if self.channel == 0:
             self.address = RPiSoC.VDAC0_CONTROL
+            self.full_range = 4.08
         elif self.channel == 1:
             self.address = RPiSoC.VDAC1_CONTROL
+            self.full_range = 1.02
         else:
             raise ValueError('Invalid channel: Only two VDACs available; choose 0 or 1')
 
@@ -499,12 +604,31 @@ class VDAC(object):
         cmd = 0x03
         if Range =='LOW': #Range of 1.020 V
             val = 0
+            self.full_range = 1.02
         elif Range =='HIGH': #Range of 4V
             val = 1
+            self.full_range = 4.08
         else:
             raise ValueError('Invalid Range: Input "HIGH" for 4.080V range or "LOW" for 1.020V range')
 
         RPiSoC.commChannel.sendData((self.address, cmd, val))
+
+    def SetVoltage(self, volts):
+        """
+        **Description:**
+        Sets a voltage in Volts to be output on the specified VDAC. Valid values depend on the chosen full scale range
+
+        **Parameters:**
+        - *volts*: number between 0 and the full scale range in Volts.
+        * The full scale value depends on the range, which is chosen with the SetRange() method.
+        """
+	
+
+        if volts <= self.full_range and volts>=0:
+            digital_val = int((float(volts)/self.full_range) * 255 + 0.5)
+        else:
+            digital_val = int(255*(volts>self.full_range))
+        self.SetValue(digital_val)
 
     def SetValue(self, value):
         """
