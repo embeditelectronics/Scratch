@@ -10,33 +10,6 @@ import functools
 import threading
 import Queue
 
-menu_items = dict(
-        dig_num = ["LED"] + [str(c) for c in range(1, 9)],
-        num = list(range(1, 5)),
-        octaves = list(range(0, 10)), 
-        volume = list(range(0, 11)),
-        config = ["output", "input", "pull_up", "pull_down"],
-        servo = ["angle", "minimumAngle", "maximumAngle"],
-        servo_c = ["start", "stop"],
-        notes = ['A', 'A#', 'B', 'B#', 'C', 'C#', 'D', 'D#', 'E', 'E#', 'F', 'F#', 'G', 'G#'],
-        dist = ["inches", "centimeters", "meters", "raw"],
-        controller_action = ["pressed", "released"],
-        rows = [0, 1, 2, 3, 4],
-        brightness = [1, 2, 3, 4, 5],
-        columns = [0, 1, 2, 3, 4, 5, 6, 7],
-        state = ["on", "off"],
-        ranger = ["start", "stop"],
-        analog = ["counts", "volts", "screen_x", "screen_y"],
-        pwm =["start", "stop", "sleep", "wakeup", "refresh"],
-        pwm_c = ["period", "compare", "onpercentage", "frequency"],
-        tone = ["note", "volume", "octave"],
-        controller = ["joystick", "A", "B", "C", "D", "select"], 
-        neo_cmd = ["fill", "clear"]
-
-    )
-
-
-
 def catch_exception(f):
         @functools.wraps(f)
         def func(*args, **kwargs):
@@ -44,7 +17,7 @@ def catch_exception(f):
                 return f(*args, **kwargs)
             except Exception as e:
                 __unknown_failure = True
-                print 'Caught an exception in', f.__name__
+                print ('Caught an exception in %r'%f.__name__)
         return func
 
 class ErrorCatcher(type):
@@ -92,29 +65,37 @@ class scratch_SoC:
     def pinVal(self, num):
         return int(pisoc_data.gpio_values[num])
 
+    @reporter("analog pin %m.num %m.analog")
+    def analogRead(self, num, analog):
+        return pisoc_data.analog_values[str(analog)][int(num)]
+
     @command('%m.neo_cmd NeoPixel screen')
     def NeoPixelcmd(self, cmd):
-        color = pisoc_data.color_ if cmd == 'fill' else 0
+        color = pisoc_data.color_ if cmd == 'Fill' else 0
+        pisoc_data.shield_data.update({k : [color for i in range(8)] for k in pisoc_data.shield_data.iterkeys()})
         command = lambda: NeoPixelShield.Fill(pisoc_data.shield, color)
         commands.put(command)
 
-    @command("set NeoPixel %m.rows %m.columns")
-    def SetNeoPixel(self, rows, columns):
-        pisoc_data.shield_data[int(rows)][int(columns)] = pisoc_data.color_
-        command = lambda: NeoPixelShield.SetPixel(pisoc_data.shield, int(rows), int(columns), pisoc_data.color_)
+    @command("%m.neo_cmd NeoPixel %m.rows %m.columns")
+    def SetNeoPixel(self, cmd, rows, columns):
+        color = pisoc_data.color_ if cmd == 'Fill' else 0
+        pisoc_data.shield_data[int(rows)][int(columns)] = color
+        command = lambda: NeoPixelShield.SetPixel(pisoc_data.shield, int(rows), int(columns), color)
         commands.put(command)
 
-    @command("draw NeoPixel row %m.rows")
-    def NeoPixelRow(self, rows):
-        pisoc_data.shield_data[int(rows)] = [pisoc_data.color_ for i in range(8)]
-        command = lambda: NeoPixelShield.DrawRow(pisoc_data.shield, int(rows), pisoc_data.color_)
+    @command("%m.neo_cmd NeoPixel row %m.rows")
+    def NeoPixelRow(self, cmd, rows):
+        color = pisoc_data.color_ if cmd == 'Fill' else 0
+        pisoc_data.shield_data[int(rows)] = [color for i in range(8)]
+        command = lambda: NeoPixelShield.DrawRow(pisoc_data.shield, int(rows), color)
         commands.put(command)
 
-    @command("draw NeoPixel column %m.columns")
-    def NeoPixelColumn(self, columns):
+    @command("%m.neo_cmd NeoPixel column %m.columns")
+    def NeoPixelColumn(self, cmd, columns):
+        color = pisoc_data.color_ if cmd == 'Fill' else 0
         for row in range(5):
-            pisoc_data.shield_data[row][int(columns)] = pisoc_data.color_
-        command = lambda: NeoPixelShield.DrawColumn(pisoc_data.shield, int(columns), pisoc_data.color_)
+            pisoc_data.shield_data[row][int(columns)] = color
+        command = lambda: NeoPixelShield.DrawColumn(pisoc_data.shield, int(columns), color)
         commands.put(command)
 
     @command("set NeoPixel brightness to %m.brightness")
@@ -201,77 +182,6 @@ class scratch_SoC:
     def rangeFinderReport(self, dist):
         return pisoc_data.range_finding[dist]
 
-
-
-    """
-    @reporter("analog pin %d.num %m.analog")
-    def analogRead(self, num, analog):
-        return pisoc_data.analog_values[str(analog)][int(num)]
-
-    @command("set PWM %d.num %m.pwm_c to %n")
-    def setPWMval(self, num, pwm_c, val):
-        pass
-
-    @command("tell PWM %d.num to %m.pwm")
-    def setPWM(self, num, pwm):
-       return 0
-
-    @reporter("PWM %d.num %m.pwm_c value")
-    def getPWM(self, num, pwm_c):
-        return 0
-
-    
-
-    
-        
-    
-
-    
-    
-
-    
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    @command("Draw all NeoPixels")
-    def NeoPixelFill(self):
-        pisoc_data.shield_data = {key: [pisoc_data.color_ for i in range(8)] for key in range(5)}
-        command = lambda: NeoPixelShield.Fill(pisoc_data.shield, pisoc_data.color_)
-        #command = "self.shield.Fill(%r)"%pisoc_data.color_
-        commands.put(command)
-
-    @command("clear all NeoPixels")
-    def NeoPixelClear(self):
-        pisoc_data.shield_data = {key: [0 for i in range(8)] for key in range(5)}
-        command = lambda: NeoPixelShield.Fill(pisoc_data.shield, 0)
-        #command = r"self.shield.Fill(0)"
-        commands.put(command)
-
-    @command("set NeoPixel color to %s")
-    def setNeoPixelcolor1(self, color):
-        if hasattr(pisoc_data.shield, color.capitalize()):
-            pisoc_data.color_ = getattr(pisoc_data.shield, color.capitalize())
-
-    """
-
-    
-
-    
-
-
 class PiSoC_Data(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
@@ -293,7 +203,7 @@ class PiSoC_Data(threading.Thread):
         self.gpio_values = {key: False for key in menu_items['dig_num']}
         self.capsense_values = {key: False for key in menu_items['num']}
 
-        self.shield_data = {0: [0 for i in range(8)], 1:[0 for i in range(8)], 2: [0 for i in range(8)],3: [0 for i in range(8)],4: [0 for i in range(8)]}
+        self.shield_data = {k: [0 for i in range(8)] for k in range(5)}
         self.shield_data = {key: [0 for i in range(8)] for key in range(5)}
         self.brightness = 1
 
@@ -309,8 +219,6 @@ class PiSoC_Data(threading.Thread):
             self.pwms[chan].update(tone_notes)
             self.pwms[chan].update(tone_octave)
             self.pwms[chan].update(tone_volume)
-        print self.gpio_objects
-        print self.gpio_values
 
         self.pwm_l = [None for i in range(PiSoC.PWM_NUM)]
 
@@ -454,7 +362,6 @@ class PiSoC_Data(threading.Thread):
         num = kwargs.get("num", 1)
         cmd = kwargs.get("cmd", None)
 
-        print num, cmd
 
         if cmd == 'start':
             if self.pwms[num]["Type"] == None:
@@ -490,8 +397,7 @@ class PiSoC_Data(threading.Thread):
                     self.pwms[num]['maximumAngle'] = maxangle
                     self.pwms[num]['minimumAngle'] = minangle
                     self.pwm_l[num - 1].ChangeAngles(minangle, maxangle)
-                else:
-                    print "Didn't recognize %r"%cmd
+                
 
 
     def _tone_service(self, *args, **kwargs):
@@ -514,19 +420,11 @@ class PiSoC_Data(threading.Thread):
         else:
             if self.pwms[num]["Type"] == "Tone":
                 val = kwargs.get(cmd)
-                print val
                 self.pwms[num][cmd] = val
                 if cmd == 'volume':
                     self.pwm_l[num - 1].SetVolume(val)
                 elif cmd == 'note':
-
-                    print self.pwms[num]['note'], type(self.pwms[num]['note'])
                     self.pwm_l[num - 1].SetNote(val, self.pwms[num]['octave'])
-
-
-    def _pwm_service(self):
-        pass
-
         
 
 
@@ -537,6 +435,31 @@ class Scratch_Extension(threading.Thread):
     def run(self):
         self.extension.run_forever(debug = False)
 
+
+menu_items = dict(
+        dig_num = ["LED"] + [str(c) for c in range(1, 9)],
+        num = list(range(1, 9)),
+        octaves = list(range(0, 10)), 
+        volume = list(range(0, 11)),
+        config = ["output", "input", "pull_up", "pull_down"],
+        servo = ["angle", "minimumAngle", "maximumAngle"],
+        servo_c = ["start", "stop"],
+        notes = ['A', 'A#', 'B', 'B#', 'C', 'C#', 'D', 'D#', 'E', 'E#', 'F', 'F#', 'G', 'G#'],
+        dist = ["inches", "centimeters", "meters", "raw"],
+        controller_action = ["pressed", "released"],
+        rows = [0, 1, 2, 3, 4],
+        brightness = [1, 2, 3, 4, 5],
+        columns = [0, 1, 2, 3, 4, 5, 6, 7],
+        state = ["on", "off"],
+        ranger = ["start", "stop"],
+        analog = ["counts", "volts", "screen_x", "screen_y"],
+        pwm =["start", "stop", "sleep", "wakeup", "refresh"],
+        pwm_c = ["period", "compare", "onpercentage", "frequency"],
+        tone = ["note", "volume", "octave"],
+        controller = ["joystick", "A", "B", "C", "D", "select"], 
+        neo_cmd = ["Fill", "Clear"]
+
+    )
 
 
 if __name__ == '__main__':
@@ -553,10 +476,11 @@ if __name__ == '__main__':
     Block('pinConfig', 'command', 'set pin %m.dig_num as %m.config'),
     Block('setPin', 'command', 'turn pin %m.dig_num %m.state'),
     Block('pinVal', 'reporter', 'pin %m.dig_num value'),
+    Block('analogRead', 'reporter', 'analog pin %m.num %m.analog'), 
     Block('NeoPixelcmd', 'command', '%m.neo_cmd NeoPixel screen'),
-    Block('SetNeoPixel', 'command', 'set NeoPixel %m.rows %m.columns'),
-    Block('NeoPixelRow', 'command', 'draw NeoPixel row %m.rows'),
-    Block('NeoPixelColumn', 'command', 'draw NeoPixel column %m.columns'),
+    Block('SetNeoPixel', 'command', '%m.neo_cmd NeoPixel %m.rows %m.columns'),
+    Block('NeoPixelRow', 'command', '%m.neo_cmd NeoPixel row %m.rows'),
+    Block('NeoPixelColumn', 'command', '%m.neo_cmd NeoPixel column %m.columns'),
     Block('NeoPixelDim', 'command', 'set NeoPixel brightness to %m.brightness'),
     Block('setNeoPixelcolor2', 'command', 'set NeoPixel color to %c'),
     Block('joystickRead_x_axis', 'reporter', 'Controller joystick x %m.analog'),
