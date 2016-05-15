@@ -6,919 +6,596 @@ from future import *
 from blockext import *
 from pisoc import *
 from serial import SerialException
+import functools
+import threading
+import Queue
+
+menu_items = dict(
+        dig_num = ["LED"] + [str(c) for c in range(1, 9)],
+        num = list(range(1, 5)),
+        octaves = list(range(0, 10)), 
+        volume = list(range(0, 11)),
+        config = ["output", "input", "pull_up", "pull_down"],
+        servo = ["angle", "minimumAngle", "maximumAngle"],
+        servo_c = ["start", "stop"],
+        notes = ['A', 'A#', 'B', 'B#', 'C', 'C#', 'D', 'D#', 'E', 'E#', 'F', 'F#', 'G', 'G#'],
+        dist = ["inches", "centimeters", "meters", "raw"],
+        controller_action = ["pressed", "released"],
+        rows = [0, 1, 2, 3, 4],
+        brightness = [1, 2, 3, 4, 5],
+        columns = [0, 1, 2, 3, 4, 5, 6, 7],
+        state = ["on", "off"],
+        ranger = ["start", "stop"],
+        analog = ["counts", "volts", "screen_x", "screen_y"],
+        pwm =["start", "stop", "sleep", "wakeup", "refresh"],
+        pwm_c = ["period", "compare", "onpercentage", "frequency"],
+        tone = ["note", "volume", "octave"],
+        controller = ["joystick", "A", "B", "C", "D", "select"], 
+        neo_cmd = ["fill", "clear"]
+
+    )
+
+
+
+def catch_exception(f):
+        @functools.wraps(f)
+        def func(*args, **kwargs):
+            try:
+                return f(*args, **kwargs)
+            except Exception as e:
+                __unknown_failure = True
+                print 'Caught an exception in', f.__name__
+        return func
+
+class ErrorCatcher(type):
+    def __new__(cls, name, bases, dct):
+        for m in dct:
+            if hasattr(dct[m], '__call__'):
+                dct[m] = catch_exception(dct[m])
+        return type.__new__(cls, name, bases, dct)
+
 
 class scratch_SoC:
+    #__metaclass__ = ErrorCatcher
     def __init__(self):
-        #print('initing')
-       
-        self.joystick_l = dict()
-        self.analog_values = dict()
-        self.select_l = dict()
-        self.bitmap = 0
-        self.neopixels = NeoPixelShield()
-        self.open = False
-        self.capsense_is_running = False
-        self.cap_result = 0
-        self.__neopixelcolor = 0x00
-        self.__failed = False
-        self.__connecting = False
-        self.__lost_connection = False
-        self.__port_failure = False
-        self.__lists_filled = False
-
-        self.gpio_l = [None]+[j for i in [[digitalPin(k, v, None) for v in PiSoC.GPIO[k]] for k in sorted(PiSoC.GPIO)] for j in i]
-        self.ranger_l = [[None, None] for x in self.gpio_l]
-        self.capsense_l = [None] + [CapSense(i, threshold = 6) for i in range(PiSoC.CAPSENSE_SENSOR_NUM)]
-        self.analog_l = [None] + [analogPin(i) for i in range(PiSoC.ANALOG_IN_NUM)]
-        self.pwm_l = [None for x in range(PiSoC.PWM_NUM + 1)]
-        self.servo_l = [x for x in self.pwm_l]
-
-        self.__busy = False
-        self.open = True
+        self.color_ = 0
 
     def _problem(self):
-        if self.__connecting:
-            self.open = False
-            return "Trying to connect..."
-        elif self.__lost_connection:
-            self.open = False
-            return "connection was lost..."
-        elif self.__port_failure:
-            self.open = False
-            return "Port is closed; can't write to it"
-        elif self.__failed:
-            self.open = False
-            return "Couldn't open serial port... Verify connection and try again"
-        else:
-            return False
+        if not pisoc_data.connected_:
+            return "Can't connect to PiSoC! Cycling power should fix the problem!"
+        return False
 
-    def reconnect_pisoc(self):
-        try:
-            print('trying to reconnect')
-            self.open = False
-            self.__connecting = True
-            time.sleep(0.25)
-            if PiSoC.commChannel.reconnect():
-
-                '''
-                self.gpio_l = [None]
-                self.capsense_l = [None]
-                self.analog_l = [None]
-                self.pwm_l = [None]
-                self.neopixels = NeoPixelShield()
-                for key in sorted(PiSoC.GPIO.keys()):
-                    for elem in sorted(PiSoC.GPIO[key]):
-                        self.gpio_l.append(digitalPin(int(key), int(elem)))
-                        self.ranger_l.append(None)
-                        self.trigger.append(None)
-                for i in range(PiSoC.CAPSENSE_SENSOR_NUM):
-                    self.capsense_l.append(CapSense(i, THRESHOLD = 4))
-                for i in range(PiSoC.ANALOG_IN_NUM):
-                    self.analog_l.append(analogPin(i))
-                for i in range(PiSoC.PWM_NUM):
-                    self.pwm_l.append(None)
-                    self.servo_l.append(None)
-                '''
-                self.bitmap = 0
-                self.__failed = False
-                self.__lost_connection = False
-                self.__port_failure = False
-                self.__connecting = False
-                self.__busy = False
-                print('reconnected successfully.')
-                self.open = True
-        except SerialException:
-                self.__failed = True
-                print("Couldn't open port...")
-        except LostConnection:
-            print("Connection was lost..")
-            self.__lost_connection = True
-        except:
-            print("Connection was lost..")
-            self.__lost_connection = True
-
-        self.__connecting = False
-        if not self.open:
-            print("\nA problem occured: \nCouldn't open port. Verify connection and try again")
-            self.__failed = True
-
-    """
-    @command("open PiSoC on COM %n with %d.baud baud")
-    def pisocOpen(self, com, baudr):
-        if not self.open:
-            self.com = com
-            self.baudr = int(baudr)
-            self.__connecting = True
-            for i in range(3):
-                try:
-                    if not self.open:
-                        if not self.__lost_connection:
-                            print("Trying to open COM%s" %com)
-                            PiSoC('COM'+str(com), baud = baudr, DEBUG = True)
-                            if PiSoC.DEBUG:
-                                err_str = ('commChannel attribute not found', 'commChannel attribute found')[hasattr(PiSoC, 'commChannel')]
-                                print err_str
-                            self.gpio_l = [None]
-                            self.capsense_l = [None]
-                            self.analog_l = [None]
-                            self.pwm_l = [None]
-                            for key in sorted(PiSoC.GPIO.keys()):
-                                    for elem in sorted(PiSoC.GPIO[key]):
-                                        self.gpio_l.append(digitalPin(int(key), int(elem)))
-                                        self.ranger_l.append(None)
-                                        self.trigger.append(None)
-                            for i in range(PiSoC.CAPSENSE_SENSOR_NUM):
-                                self.capsense_l.append(CapSense(i, THRESHOLD = 4))
-                            for i in range(PiSoC.ANALOG_IN_NUM):
-                                self.analog_l.append(analogPin(i))
-                            for i in range(PiSoC.PWM_NUM):
-                                self.pwm_l.append(None)
-                                self.servo_l.append(None)
-                            self.__failed = False
-                            self.__lost_connection = False
-                            self.__port_failure = False
-                            self.__connecting = False
-                            self.open = True
-                            break
-                        else:
-                            print('trying to reconnect')
-                            if PiSoC.commChannel.reconnect():
-                                self.gpio_l = [None]
-                                self.capsense_l = [None]
-                                self.analog_l = [None]
-                                self.pwm_l = [None]
-                                print('filling lists..')
-                                for key in sorted(PiSoC.GPIO.keys()):
-                                    for elem in sorted(PiSoC.GPIO[key]):
-                                        self.gpio_l.append(digitalPin(int(key), int(elem)))
-                                        self.ranger_l.append(None)
-                                        self.trigger.append(None)
-                                for i in range(PiSoC.CAPSENSE_SENSOR_NUM):
-                                    self.capsense_l.append(CapSense(i, THRESHOLD = 4))
-                                for i in range(PiSoC.ANALOG_IN_NUM):
-                                    self.analog_l.append(analogPin(i))
-                                for i in range(PiSoC.PWM_NUM):
-                                    self.pwm_l.append(None)
-                                    self.servo_l.append(None)
-                                print('lists filled')
-                                self.__failed = False
-                                self.__lost_connection = False
-                                self.__port_failure = False
-                                self.__connecting = False
-                                print('reconnected successfully.')
-                                self.open = True
-                                break
-                except SerialException:
-                    self.__failed = True
-                    print("Couldn't open COM%s... %d tries remaining\n"%(com, (3-i)))
-                    time.sleep(1)
-                except LostConnection:
-                    print("Connection was lost..")
-                    self.__lost_connection = True
-                except:
-                    print("Connection was lost..")
-                    self.__lost_connection = True
-
-
-        self.__connecting = False
-        if not self.open:
-            print("\nA problem occured: \nCouldn't open COM%s... Verify connection and COM number and try again"%com)
-            self.__failed = True
-        """
-
-
-    @command("reset PiSoC")
-    def pisocClose(self):
-        try:
-            if self.open:
-                while self.__busy:
-                    pass
-                self.__busy = True
-                PiSoC.commChannel.cleanup()
-                if not self.__connecting:
-                    self.reconnect_pisoc()
-                self.__busy = False
-        except LostConnection:
-            self.__lost_connection = True
-        except ClosedPortException:
-            self.__port_failure = True
-
-    @predicate("touch sensor %d.num touched?")
+    @predicate("touch sensor %m.num touched?")
     def capsenseTouched(self, num):
-        if self.open:
-            num = int(num)
-            try:
-                while self.__busy:
-                    pass
-                self.__busy = True
-                num = int(num)
-                if not self.capsense_l[num].isRunning():
-                    self.capsense_l[num].Start()
-                if num == 1:
-                    self.cap_result = self.capsense_l[1].get_register()
+        return pisoc_data.capsense_values[int(num)]
 
-                result = (self.cap_result>>(num - 1))&0x01
-                self.__busy = False
-                return result
-            except LostConnection:
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-            return False
-
-    @command("set pin %n to %m.state")
-    def setPin(self, pin, state):
-        print("Setting pin %d to %s" %(pin, state))
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                if self.gpio_l[pin].config is not None:
-                    self.gpio_l[pin].Write((1, 0)[state == 'off'])
-                self.__busy = False
-            except LostConnection:
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-
-    @command("configure Joystick %d.num with X:%d.num Y:%d.num button:%d.dig_num")
-    def joystickConfig(self, num, x_axis, y_axis, pin):
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            num = int(num)
-            x_axis = int(x_axis)
-            y_axis = int(y_axis)
-            pin = int(pin)
-            self.joystick_l[num] = [x_axis, y_axis, pin]
-            self.analog_values[x_axis] = [None, None, None, None]
-            self.analog_values[y_axis] = [None, None, None, None]
-            self.select_l[pin] = None
-            try:
-                self.gpio_l[pin].Configure('PULL_UP')
-                self.gpio_l[pin].Write(1)
-                print self.gpio_l[pin]
-                self.select_l[pin] = self.gpio_l[pin].state
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-    @reporter("Joystick %d.num X %m.analog")
-    def joystickRead_x_axis(self, num, choice):
-        if self.open:
-            num = int(num)
-            try:
-                if choice == 'counts':
-                    return self.analog_values[self.joystick_l[num][0]][0]
-                elif choice == 'volts':
-                    return self.analog_values[self.joystick_l[num][0]][1]
-                elif choice == 'screen_x_axis':
-                    return self.analog_values[self.joystick_l[num][0]][2]
-                elif choice == 'screen_y_axis':
-                    return self.analog_values[self.joystick_l[num][0]][3]
-            except KeyError:
-                return "Joystick %s not configured yet!"%num
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-    @reporter("Joystick %d.num Y %m.analog")
-    def joystickRead_y_axis(self, num, choice):
-        if self.open:
-            num = int(num)
-            try:
-                if choice == 'counts':
-                    return self.analog_values[self.joystick_l[num][1]][0]
-                elif choice == 'volts':
-                    return self.analog_values[self.joystick_l[num][1]][1]
-                elif choice == 'screen_x_axis':
-                    return self.analog_values[self.joystick_l[num][1]][2]
-                elif choice == 'screen_y_axis':
-                    return self.analog_values[self.joystick_l[num][1]][3]
-            except KeyError:
-                return "Joystick %s not configured yet!"%num
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-    @predicate("Joystick %d.dig_num button pressed?")
-    def joystickRead_select(self, num):
-        if self.open:
-            num = int(num)
-            try:
-                return not self.select_l[self.joystick_l[num][2]]
-            except KeyError:
-                return False
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-
-    @command("set pin %n as %m.config")
-    def pinConfig(self, pin, config):
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                print("Setting pin %d as %s" %(pin, config))
-                self.gpio_l[pin].Configure(config)
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-
-    @command('blink pin %n')
-    def pinBlink(self, pin):
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                print("blinking pin %d" %pin)
-                if self.gpio_l[pin].config is not None:
-                    self.gpio_l[pin].Toggle()
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-    @predicate("pin %d.dig_num is on?")
+    @predicate("pin %m.dig_num is on?")
     def pinState(self, num):
-        #print("reading pin %s" %num)
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            num = int(num)
-            try:
-                if (num == 1):
-                    self.bitmap = self.gpio_l[1].get_gpio_bitmap()
+       return pisoc_data.gpio_values[num]
 
-                result = (self.bitmap>>(num - 1))&0x01
-                if num in self.select_l:
-                    self.select_l[num] = result
-                self.__busy = False
-                return result
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-            return False
+    @command('blink pin %m.dig_num')
+    def pinBlink(self, pin):
+        command = lambda: DigitalPin.Toggle(pisoc_data.gpio_objects[pin])
+        commands.put(command)
 
-    @reporter("pin %d.dig_num value")
+    @command("set pin %m.dig_num as %m.config")
+    def pinConfig(self, pin, config):
+        command = lambda: DigitalPin.Configure(pisoc_data.gpio_objects[pin], config)
+        commands.put(command)
+
+    @command("turn pin %m.dig_num %m.state")
+    def setPin(self, pin, state):
+        command = lambda: DigitalPin.Write(pisoc_data.gpio_objects[pin], state == 'on')
+        commands.put(command)
+
+    @reporter("pin %m.dig_num value")
     def pinVal(self, num):
-        #print("reading pin %s" %num)
-        if self.open:
-            num = int(num)
-            try:
-                result = (self.bitmap>>num)&0x01
-                return result
-            except LostConnection:
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-            return 0
+        return int(pisoc_data.gpio_values[num])
 
-    @reporter("analog pin %d.num %m.analog")
-    def analogRead(self, num, analog):
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            num = int(num)
-            try:
-                counts = self.analog_l[num].Read()
-                volts = self.analog_l[num].ReadVolts(COUNTS = counts)
-                screen_y = 55*volts - 140
-                screen_x = 75*volts - 180
-                self.__busy = False
-                if num in self.analog_values:
-                    self.analog_values[num] = [counts, volts, screen_x, screen_y]
-                if analog == 'counts':
-                    return counts
-                elif analog == 'volts':
-                    return volts
-                elif analog == 'screen_x_axis':
-                    return screen_x
-                elif analog == 'screen_y_axis':
-                    return screen_y
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
+    @command('%m.neo_cmd NeoPixel screen')
+    def NeoPixelcmd(self, cmd):
+        color = pisoc_data.color_ if cmd == 'fill' else 0
+        command = lambda: NeoPixelShield.Fill(pisoc_data.shield, color)
+        commands.put(command)
 
-
-    @command("set PWM %d.num %m.pwm_c to %n")
-    def setPWMval(self, num, pwm_c, val):
-        num = int(num)
-        while self.__busy:
-            pass
-        self.__busy = True
-        try:
-            if self.open:
-                if self.pwm_l[num] is None:
-                    self.pwm_l[num] = PWM(num - 1)
-                status = self.pwm_l[num].isRunning()
-                if not status:
-                    self.pwm_l[num].Start()
-                if pwm_c == 'period':
-                    val = int(val)
-                    self.pwm_l[num].WritePeriod(val, safety = True)
-                elif pwm_c == 'compare':
-                    val = int(val)
-                    self.pwm_l[num].WriteCompare(val, safety = True)
-                elif pwm_c == 'onpercentage':
-                    val = float(val)
-                    self.pwm_l[num].SetDutyCycle(val, safety = True)
-                elif pwm_c == 'frequency':
-                    val = float(val)
-                    self.pwm_l[num].SetFrequency(val)
-                elif pwm_c == 'midinote':
-                    val = int(val)
-                    self.pwm_l[num].SetMIDI(val)
-                if not status:
-                    self.pwm_l[num].Stop()
-                self.__busy = False
-            else:
-                if not self.__connecting:
-                    self.reconnect_pisoc()
-        except LostConnection:
-            self.__busy = False
-            self.__lost_connection = True
-        except ClosedPortException:
-            self.__busy = False
-            self.__port_failure = True
-
-    @command("tell PWM %d.num to %m.pwm")
-    def setPWM(self, num, pwm):
-        num = int(num)
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                if self.pwm_l[num] is None:
-                    self.pwm_l[num] = PWM(num -1)
-                if pwm == 'start':
-                    self.pwm_l[num].Start()
-                elif pwm == 'stop':
-                    self.pwm_l[num].Stop()
-                status = self.pwm_l[num].isRunning()
-                if not status:
-                    self.pwm_l[num].Start()
-                if pwm == 'sleep':
-                    self.pwm_l[num].Sleep()
-                elif pwm == 'wakeup':
-                    self.pwm_l[num].Wakeup()
-                elif pwm == 'refresh':
-                    self.pwm_l[num].ReadPeriod()
-                    self.pwm_l[num].ReadCompare()
-                if not status:
-                    self.pwm_l[num].Stop()
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-
-
-    @reporter("PWM %d.num %m.pwm_c value")
-    def getPWM(self, num, pwm_c):
-        num = int(num)
-        if self.open:
-            try:
-                if self.pwm_l[num] is not None:
-                    if pwm_c == 'period':
-                        return self.pwm_l[num].period
-                    elif pwm_c == 'compare':
-                        return self.pwm_l[num].cmp
-                    elif pwm_c == 'onpercentage':
-                        return self.pwm_l[num].GetDutyCycle()
-                    elif pwm_c == 'frequency':
-                        return self.pwm_l[num].GetFrequency()
-                    elif pwm_c == 'midinote':
-                        return self.pwm_l[num].GetMIDI()
-                else:
-                    return ("PWM %d hasn't been started!")%num
-            except LostConnection:
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-    @command("tell %d.num to %d.servo_c")
-    def setServo(self, num, servo_c):
-        num = int(num)
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                if self.servo_l[num] is None:
-                    self.servo_l[num] = Servo(num -1)
-                if servo_c == 'start':
-                    self.servo_l[num].Start()
-                elif servo_c == 'stop':
-                    self.servo_l[num].Stop()
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-    @command("set %d.num %m.servo to %n")
-    def setServoVal(self, num, servo, val):
-        num = int(num)
-        val = int(val)
-
-        if self.open:
-            while self.__busy:
-                pass
-            self.__busy = True
-            try:
-                if self.servo_l[num] is None:
-                    self.servo_l[num] = PWM(num -1)
-                if servo == 'minimumAngle':
-                    self.servo_l[num].changeAngles(val, self.servo_l[num].max_angle)
-                elif servo == 'maximumAngle':
-                    self.servo_l[num].changeAngles(self.servo_l[num].min_angle, val)
-                elif servo == 'angle':
-                    self.servo_l[num].SetAngle(val)
-                elif servo == 'pulse':
-                    self.servo_l[num].SetPulse(val)
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-
-    @command("set %d.num angle range from %n to %n")
-    def setServoAngles(self, num, minangle, maxangle):
-        num = int(num)
-        minangle = float(minangle)
-        maxangle = float(maxangle)
-
-        if self.open:
-            while self.__busy:
-                pass
-            self.__busy = True
-            try:
-                if self.servo_l[num] is None:
-                    self.servo_l[num] = PWM(num -1)
-                self.servo_l[num].changeAngles(minangle, maxangle)
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-
-    @reporter("servo %d.num %m.servo value")
-    def getServo(self, num, servo):
-        num = int(num)
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                if self.servo_l[num] is not None:
-                    if servo == 'minimumAngle':
-                        val = self.servo_l[num].min_angle
-                    elif servo == 'maximumAngle':
-                        val = self.servo_l[num].max_angle
-                    elif servo == 'angle':
-                        val = self.servo_l[num].ReadAngle()
-                    elif servo == 'pulse':
-                        val = self.servo_l[num].ReadPulse()
-                    self.__busy = False
-                    return val
-                else:
-                    self.__busy = False
-                    return ("Servo %d hasn't been started!"%num)
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-    @command("set NeoPixel %d.rows %d.columns")
+    @command("set NeoPixel %m.rows %m.columns")
     def SetNeoPixel(self, rows, columns):
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                if not self.neopixels.isRunning():
-                    self.neopixels.Start()
-                self.neopixels.SetPixel(int(rows), int(columns), self.__neopixelcolor)
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-    @command("draw NeoPixel row %d.rows")
-    def NeoPixelRow(self, rows):
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                if not self.neopixels.isRunning():
-                    self.neopixels.Start()
-                    print('starting neopixels')
-                print('drawing row %s to %s'%(rows, self.__neopixelcolor))
-                self.neopixels.DrawRow(int(rows), self.__neopixelcolor)
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-        return True
-    @command("draw NeoPixel column %d.columns")
-    def NeoPixelColumn(self, columns):
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                if not self.neopixels.isRunning():
-                    self.neopixels.Start()
-                self.neopixels.DrawColumn(int(columns), self.__neopixelcolor)
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-    @command("set NeoPixel brightness to %d.rows")
-    def NeoPixelDim(self, rows):
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                if not self.neopixels.isRunning():
-                    self.neopixels.Start()
-                self.neopixels.Dim(int(4 - int(rows)))
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
+        pisoc_data.shield_data[int(rows)][int(columns)] = pisoc_data.color_
+        command = lambda: NeoPixelShield.SetPixel(pisoc_data.shield, int(rows), int(columns), pisoc_data.color_)
+        commands.put(command)
 
-    @command("draw %n NeoPixels")
-    def NeoPixelStripe(self, pixels):
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                if not self.neopixels.isRunning():
-                    self.neopixels.Start()
-                self.neopixels.Stripe(int(pixels), self.__neopixelcolor, safety = True)
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-    @command("set NeoPixel color to %s")
-    def setNeoPixelcolor1(self, color):
-        if self.open:
-            if hasattr(self.neopixels, color.capitalize()):
-                self.__neopixelcolor = getattr(self.neopixels, color.capitalize())
-            else:
-                self.__neopixelcolor = 0
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
+    @command("draw NeoPixel row %m.rows")
+    def NeoPixelRow(self, rows):
+        pisoc_data.shield_data[int(rows)] = [pisoc_data.color_ for i in range(8)]
+        command = lambda: NeoPixelShield.DrawRow(pisoc_data.shield, int(rows), pisoc_data.color_)
+        commands.put(command)
+
+    @command("draw NeoPixel column %m.columns")
+    def NeoPixelColumn(self, columns):
+        for row in range(5):
+            pisoc_data.shield_data[row][int(columns)] = pisoc_data.color_
+        command = lambda: NeoPixelShield.DrawColumn(pisoc_data.shield, int(columns), pisoc_data.color_)
+        commands.put(command)
+
+    @command("set NeoPixel brightness to %m.brightness")
+    def NeoPixelDim(self, level):
+        pisoc_data.brightness = int(level)
+        command = lambda: NeoPixelShield.SetBrightness(pisoc_data.shield, pisoc_data.brightness)
+        commands.put(command)
 
     @command("set NeoPixel color to %c")
     def setNeoPixelcolor2(self, color):
-        if self.open:
-            self.__neopixelcolor = self.neopixels.RGB_toHex(color)
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
+        pisoc_data.color_ = pisoc_data.shield.RGB_to_hex(color)
 
+    @reporter("Controller joystick x %m.analog")
+    def joystickRead_x_axis(self, choice):
+        return pisoc_data.analog_values[choice][1]
 
-    @command("ask for range finder reading from pin %d.num")
-    def rangeFinderRead(self, num):
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                num = int(num)
-                if num<=len(self.gpio_l):
-                    if self.ranger_l[num][0] is None:
-                        if self.ranger_l[num][1] is None:
-                            self.ranger_l[num][0] = RangeFinder([self.gpio_l[num].port, self.gpio_l[num].pin], poll_frequency = 50)
-                        else:
-                            self.ranger_l[num] = RangeFinder([self.gpio_l[num].port, self.gpio_l[num].pin], [self.ranger_l[num][1][0], self.ranger_l[num][1][1]], poll_frequency = 50)
+    @reporter("Controller joystick y %m.analog")
+    def joystickRead_y_axis(self, choice):
+        return pisoc_data.analog_values[choice][2]
 
-                    reading = self.ranger_l[num][0].ReadInches()
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
-    @command("set range finder trigger pin to %d.num")
-    def rangeFinderSet(self, num):
-        if self.open:
-            while self.__busy:
-                    pass
-            self.__busy = True
-            try:
-                num = int(num)
-                if num<=len(self.gpio_l):
-                    self.ranger_l[num][1] = [self.gpio_l[num].port, self.gpio_l[num].pin]
-                self.__busy = False
-            except LostConnection:
-                self.__busy = False
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__busy = False
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
+    @predicate("Controller button %m.controller %m.controller_action ?")
+    def controller_buttons_read(self, choice, action):
+        result = pisoc_data.controller_digital['pins'][choice]['value']
+        return result if action == 'pressed' else not result
 
-    @reporter("%m.dist from range finder %d.num")
-    def rangeFinderReport(self, dist, num):
-        if self.open:
-            try:
-                num = int(num)
-                if self.ranger_l[num][0] is not None:
-                    raw_reading = self.ranger_l[num][0].raw
-                    if raw_reading == PiSoC.BAD_PARAM or raw_reading == self.ranger_l[num][0].timeout:
-                        return "I don't think the range finder is connected!!"
-                    if dist == 'raw':
-                        return raw_reading
-                    elif dist == 'inches':
-                        return self.ranger_l[num][0].inches
-                    elif dist == 'centimeters':
-                        return self.ranger_l[num][0].centimeters
-                    elif dist == 'meters':
-                        return self.ranger_l[num][0].meters
-                else:
-                    return ("ranger finder %d is not set up yet!"%num)
-            except LostConnection:
-                self.__lost_connection = True
-            except ClosedPortException:
-                self.__port_failure = True
-        else:
-            if not self.__connecting:
-                self.reconnect_pisoc()
+    @reporter("tone %m.num %m.tone value")
+    def getTone(self, num, tone):
+        return pisoc_data.pwms[int(num)][tone]
 
-    def _isInt(self,test):
+    @command("tell tone %m.num to %m.ranger")
+    def setTone(self, num, servo_c):
+        command = lambda: pisoc_data._tone_service(num = int(num), cmd = servo_c)
+        commands.put(command)
+
+    @command("set tone %m.num note to %m.notes")
+    def setToneVal(self, num, val):
+        command = lambda: pisoc_data._tone_service(cmd = 'note', num = int(num), note = str(val))
+        commands.put(command)
+
+    @command("set tone %m.num octave to %m.octaves")
+    def setToneOctave(self, num, val):
+        command = lambda: pisoc_data._tone_service(cmd = 'octave', num = int(num), octave = str(val))
+        commands.put(command)
+
+    @command("set tone %m.num volume to %m.volume")
+    def setToneVolume(self, num, val):
+        command = lambda: pisoc_data._tone_service(cmd = 'volume', num = int(num), volume = int(val))
+        commands.put(command)
+
+    @reporter("servo %m.num %m.servo value")
+    def getServo(self, num, servo):
+       return pisoc_data.pwms[int(num)][servo]
+
+    @command("tell servo %m.num to %m.servo_c")
+    def setServo(self, num, servo_c):
+        command = lambda: pisoc_data._servo_service(num = int(num), cmd = servo_c)
+        commands.put(command)
+
+    @command("set servo %m.num %m.servo to %n")
+    def setServoVal(self, num, servo, val):
         try:
-            return test%1 == 0
+            int(val)
+            command = lambda: pisoc_data._servo_service(num = int(num), cmd = servo, val = int(val))
+            commands.put(command)
         except:
-            return False
+            pass
+        
 
-descriptor = Descriptor(
-    name = "PiSoC",
-    port = 42001,
-    blocks = [
-        Block('pisocClose','command', 'reset PiSoC'),
-        Block('pinVal', 'reporter', 'pin %d.dig_num value'),
-        Block('analogRead', 'reporter', 'analog pin %d.num %m.analog'),
-        Block('joystickConfig', 'command', 'configure Joystick %d.num with X:%d.num Y:%d.num button:%d.dig_num'),
-        Block('joystickRead_x_axis', 'reporter', 'Joystick %d.num X %m.analog'),
-        Block('joystickRead_y_axis', 'reporter', 'Joystick %d.num Y %m.analog'),
-        Block('joystickRead_select', 'predicate', 'Joystick %d.dig_num button pressed?'),
-        Block('getPWM', 'reporter', 'PWM %d.num %m.pwm_c value'),
-        Block('getServo', 'reporter', 'servo %d.num %m.servo value'),
-        Block('pinState', 'predicate', 'pin %d.dig_num is on?'),
-        Block('capsenseTouched', 'predicate', 'touch sensor %d.num touched?'),
-        Block('pinBlink', 'command', 'blink pin %n'),
-        Block('setPin', 'command', 'set pin %n to %m.state'),
-        Block('pinConfig', 'command', 'set pin %n as %m.config'),
-        Block('setPWMval', 'command', 'set PWM %d.num %m.pwm_c to %n'),
-        Block('setPWM', 'command', 'tell PWM %d.num to %m.pwm'),
-        Block('setServo', 'command', 'tell servo %d.num to %m.servo_c'),
-        Block('setServoVal','command', 'set servo %d.num %m.servo to %n'),
-        Block('setServoAngles', 'command', 'set servo %d.num angle range from %n to %n'),
-        Block('SetNeoPixel', 'command', 'set NeoPixel %d.rows %d.columns'),
-        Block('NeoPixelRow', 'command', 'draw NeoPixel row %d.rows'),
-        Block('NeoPixelColumn', 'command', 'draw NeoPixel column %d.columns'),
-        Block('NeoPixelDim', 'command', 'set NeoPixel brightness to %d.rows'),
-        Block('NeoPixelStripe', 'command', 'draw %n NeoPixels'),
-        Block('setNeoPixelcolor1', 'command', 'set NeoPixel color to %s'),
-        Block('setNeoPixelcolor2', 'command', 'set NeoPixel color to %c'),
-        Block('rangeFinderRead', 'command', 'ask for range finder reading from pin %d.num'),
-        Block('rangeFinderSet', 'command', 'set range finder trigger pin to %d.num'),
-        Block('rangeFinderReport', 'reporter', '%m.dist from range finder %d.num')
+    @command("set servo %m.num angle range from %n to %n")
+    def setServoAngles(self, num, minangle, maxangle):
+        try:
+            int(minangle)
+            int(maxangle)
+            command = lambda: pisoc_data._servo_service(num = int(num), cmd = 'change_angles', minangle = int(minangle), maxangle = int(maxangle))
+            commands.put(command)
+        except:
+            pass
+
+    @command("%m.ranger distance measurement")
+    def rangeFinderSet(self, ranger):
+       pisoc_data.is_range_finding = ranger == "start"
+
+    @reporter("ranger finder %m.dist")
+    def rangeFinderReport(self, dist):
+        return pisoc_data.range_finding[dist]
 
 
-    ],
-    menus = dict(
-        dig_num = range(1, 23),
-        num = [1, 2, 3, 4],
-        config = ["output", "input", "pull up", "open drain"],
-        servo = ["angle", "pulse", "minimumAngle", "maximumAngle"],
-        servo_c = ["start", "stop"],
-        dist = ["inches", "centimeters", "meters", "raw"],
-        rows = [0, 1, 2, 3, 4],
-        columns = [0, 1, 2, 3, 4, 5, 6, 7],
-        state = ["on", "off"],
-        baudr = [9600, 14400, 19200, 38400, 57600, 115200],
-        analog = ["counts", "volts", "screen_x_axis", "screen_y_axis"],
-        pwm =["start", "stop", "sleep", "wakeup", "refresh"],
-        pwm_c = ["period", "compare", "onpercentage", "frequency", "midinote"]
 
-    ),
-)
+    """
+    @reporter("analog pin %d.num %m.analog")
+    def analogRead(self, num, analog):
+        return pisoc_data.analog_values[str(analog)][int(num)]
 
-extension = Extension(scratch_SoC, descriptor)
+    @command("set PWM %d.num %m.pwm_c to %n")
+    def setPWMval(self, num, pwm_c, val):
+        pass
+
+    @command("tell PWM %d.num to %m.pwm")
+    def setPWM(self, num, pwm):
+       return 0
+
+    @reporter("PWM %d.num %m.pwm_c value")
+    def getPWM(self, num, pwm_c):
+        return 0
+
+    
+
+    
+        
+    
+
+    
+    
+
+    
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    @command("Draw all NeoPixels")
+    def NeoPixelFill(self):
+        pisoc_data.shield_data = {key: [pisoc_data.color_ for i in range(8)] for key in range(5)}
+        command = lambda: NeoPixelShield.Fill(pisoc_data.shield, pisoc_data.color_)
+        #command = "self.shield.Fill(%r)"%pisoc_data.color_
+        commands.put(command)
+
+    @command("clear all NeoPixels")
+    def NeoPixelClear(self):
+        pisoc_data.shield_data = {key: [0 for i in range(8)] for key in range(5)}
+        command = lambda: NeoPixelShield.Fill(pisoc_data.shield, 0)
+        #command = r"self.shield.Fill(0)"
+        commands.put(command)
+
+    @command("set NeoPixel color to %s")
+    def setNeoPixelcolor1(self, color):
+        if hasattr(pisoc_data.shield, color.capitalize()):
+            pisoc_data.color_ = getattr(pisoc_data.shield, color.capitalize())
+
+    """
+
+    
+
+    
+
+
+class PiSoC_Data(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.connected_ = True
+
+        self.color_ = 0xff0000
+
+        self.is_range_finding = False
+        self.range_finding = {key: 0 for key in menu_items['dist']}
+        #A list of GPIO in sequential order from [0, 0], [0, 1] ... [15, 6], [15, 7]. Only includes GPIO available in firmware.
+        #gpio_objects = [j for i in [[DigitalPin(k, v, None) for v in PiSoC.GPIO[k]] for k in sorted(PiSoC.GPIO)] for j in i] 
+        self.gpio_objects = {p: DigitalPin(5, int(p) - 1, None) if p!='LED' else DigitalPin(12,0,'output') for p in menu_items['dig_num']}
+
+        #A dictionary of those GPIO that can be easily hashed into
+        #self.gpio_objects = {key: gpio_objects[key - 1] if key<=len(gpio_objects) else None for key in menu_items['dig_num']}
+        self.analog_objects = {i+1: AnalogPin(i) for i in range(PiSoC.ANALOG_IN_NUM)}
+
+        self.analog_values = {choice_key: {key: 0 for key in menu_items['num']} for choice_key in menu_items['analog']}
+        self.gpio_values = {key: False for key in menu_items['dig_num']}
+        self.capsense_values = {key: False for key in menu_items['num']}
+
+        self.shield_data = {0: [0 for i in range(8)], 1:[0 for i in range(8)], 2: [0 for i in range(8)],3: [0 for i in range(8)],4: [0 for i in range(8)]}
+        self.shield_data = {key: [0 for i in range(8)] for key in range(5)}
+        self.brightness = 1
+
+        #A list of PWM objects that can be PWMs, Tones, or Servos. 
+        self.pwms = { key: {k: 0 for k in menu_items['pwm_c'] + menu_items['servo']} for key in range(1, PiSoC.PWM_NUM + 1)}
+
+        tone_notes = {'note': "C"}
+        tone_octave = {'octave': 6}
+        tone_volume = {'volume': 5}
+
+        for chan in self.pwms:
+            self.pwms[chan]["Type"] = None
+            self.pwms[chan].update(tone_notes)
+            self.pwms[chan].update(tone_octave)
+            self.pwms[chan].update(tone_volume)
+        print self.gpio_objects
+        print self.gpio_values
+
+        self.pwm_l = [None for i in range(PiSoC.PWM_NUM)]
+
+        self.controller_digital = {
+            'drive_mode':'pull_up',
+            'initial_state': 1,
+            'pins': {
+                'joystick': {'pin': DigitalPin(6, 2, None), 'value': 0 },
+                'select': {'pin': DigitalPin(6, 1, None), 'value': 0 },
+                'A': {'pin': DigitalPin(12, 6, None), 'value': 0 },
+                'B': {'pin': DigitalPin(12, 7, None), 'value': 0 },
+                'C': {'pin': DigitalPin(15, 4, None), 'value': 0 },
+                'D': {'pin': DigitalPin(15, 5, None), 'value': 0 } 
+                }
+            }        
+
+        for button in self.controller_digital['pins']:
+            self.controller_digital['pins'][button]['value'] = self.controller_digital['initial_state']
+            self.controller_digital['pins'][button]['pin'].Configure(self.controller_digital['drive_mode'])
+            self.controller_digital['pins'][button]['pin'].Write(self.controller_digital['pins'][button]['value'])
+
+        self.initialize_data()
+
+    def initialize_data(self):
+
+        #Restart range finder.
+        self.ranger = RangeFinder([6, 6], trigger = [6, 7], timeout_us= 50000, poll_frequency = 10)
+
+        #Reconfigure JoyStick shield
+        for button in self.controller_digital['pins']:
+            self.controller_digital['pins'][button]['value'] = self.controller_digital['initial_state']
+            self.controller_digital['pins'][button]['pin'].Configure(self.controller_digital['drive_mode'])
+            self.controller_digital['pins'][button]['pin'].Write(self.controller_digital['pins'][button]['value'])
+
+        #Restart and Recalibrate CapSense
+        self.capsense_objects = {i+1: CapSense(i, threshold = 6) for i in range(PiSoC.CAPSENSE_SENSOR_NUM)}
+        for pin in self.capsense_objects:
+            self.capsense_objects[pin].Start()
+
+        #Reset NeoPixelShield
+        self.shield = NeoPixelShield()
+        self.shield.Start()
+        self.shield.SetBrightness(self.brightness)
+
+        #Redraw Previous state of the NeoPixels
+        for row in self.shield_data:
+            column = 0
+            for colors in self.shield_data[row]:
+                if colors>0:
+                    self.shield.SetPixel(row, column, colors)
+                column+=1
+
+        #reconfigure GPIO
+        for gpio in self.gpio_objects:
+            if self.gpio_objects[gpio].config_str is not None:
+                self.gpio_objects[gpio].Configure(self.gpio_objects[gpio].config_str)
+                if self.gpio_objects[gpio].config_str != 'input':
+                    self.gpio_objects[gpio].Write(self.gpio_values[gpio])
+
+        #Need to reconfigure PWMs here... TODO
+        
+        for pwm in self.pwms:
+            if self.pwms[pwm]["Type"] == "Servo":
+
+                #this isnt working right. No idea why....
+                self.pwm_l[pwm - 1] = Servo(pwm - 1)
+                self.pwm_l[pwm - 1].Start()
+                self.pwms_l[pwm - 1].ChangeAngles(self.pwms[pwm]["minimumAngle"], self.pwms[pwm]["maximumAngle"])#this call appears to be the problem
+                self.pwms_l[pwm - 1].SetAngle(self.pwms[pwm]["angle"])
+            elif self.pwms[pwm]["Type"] == "Tone":
+                self.pwm_l[pwm - 1].SetVolume(self.pwms[num]['volume'])
+                self.pwm_l[pwm - 1].SetNote(self.pwms[num]['note'], self.pwms[num]['octave'])
+                self.pwm_l[pwm - 1].Start()
+        
+
+    def run(self):
+        while True:
+            if self.connected_:
+                try:
+                    if not commands.empty():
+                        item = commands.get()
+                        item()
+                        commands.task_done()
+                    else:
+                        self.update_data()
+                except (SerialException, LostConnection, ClosedPortException):
+                    self.connected_ = False
+                    PiSoC.commChannel.ser.close()
+                    time.sleep(0.1)
+            else:
+                try:
+                    result = PiSoC.commChannel.reconnect()
+                    if result:
+                        self.connected_ = True
+                        self.initialize_data()
+                except:
+                    pass
+                time.sleep(1)
+                
+    def update_data(self):
+        for pin in self.analog_objects:
+            self.analog_values['counts'][pin] = self.analog_objects[pin].Read()
+            volts = self.analog_objects[pin].ReadVolts(counts = self.analog_values['counts'][pin])
+            screen_y = 55*volts - 140
+            screen_x = 75*volts - 180
+            self.analog_values['volts'][pin] = volts
+            self.analog_values['screen_x'][pin] = screen_x
+            self.analog_values['screen_y'][pin] = screen_y
+        
+
+        gpio_bitmap = self.gpio_objects[menu_items['dig_num'][0]].get_gpio_bitmap()
+
+        for button in self.controller_digital['pins']:
+            self.controller_digital['pins'][button]['value'] = not self.controller_digital['pins'][button]['pin'].Read(bitmap = gpio_bitmap)
+
+        for pin in self.gpio_values:
+            self.gpio_values[pin] = bool(self.gpio_objects[pin].Read(bitmap = gpio_bitmap))
+
+        capsense_bitmap = self.capsense_objects[menu_items['num'][0]].get_register()
+        for pin in self.capsense_values:
+            self.capsense_values[pin] = bool(self.capsense_objects[pin].is_touched(bitmap = capsense_bitmap))
+
+        if self.is_range_finding:
+            if self.ranger.is_ready():
+                inches = self.ranger.ReadInches()
+                if self.ranger.raw == PiSoC.BAD_PARAM:
+                    self.range_finding.update({k : "Distance sensor not connected!" for k in self.range_finding.iterkeys()})
+                else:
+                    self.range_finding['inches'] = inches
+                    self.range_finding['centimeters'] = self.ranger.centimeters
+                    self.range_finding['meters'] = self.ranger.meters
+                    self.range_finding['raw'] = self.ranger.raw
+        else:
+            self.range_finding.update({k : "Distance sensor not started!" for k in self.range_finding.iterkeys()})
+
+
+
+
+    def _servo_service(self, *args, **kwargs):
+
+        num = kwargs.get("num", 1)
+        cmd = kwargs.get("cmd", None)
+
+        print num, cmd
+
+        if cmd == 'start':
+            if self.pwms[num]["Type"] == None:
+                self.pwm_l[num - 1] = Servo(num - 1)
+                self.pwm_l[num - 1].Start()
+                self.pwms[num]["Type"] = "Servo"
+                self.pwms[num]["angle"] = self.pwm_l[num - 1].ReadAngle()
+                self.pwms[num]['maximumAngle'] = self.pwm_l[num - 1].max_angle
+                self.pwms[num]['minimumAngle'] = self.pwm_l[num - 1].min_angle
+        elif cmd == 'stop':
+            if self.pwms[num]["Type"] == "Servo":
+                self.pwm_l[num - 1].Stop()
+                self.pwm_l[num - 1] = None
+                self.pwms[num]["Type"] = None
+        else:
+            if self.pwms[num]["Type"] == "Servo":
+                if cmd == 'angle':
+                    angle = kwargs.get("val")
+                    if angle >= self.pwms[num]['minimumAngle'] and angle <= self.pwms[num]['maximumAngle']:
+                        self.pwms[num]['angle'] = angle
+                        self.pwm_l[num - 1].SetAngle(angle)
+                elif cmd == 'minimumAngle':
+                    angle = kwargs.get("val")
+                    self.pwm_l[num - 1].ChangeAngles(angle, self.pwm_l[num - 1].max_angle)
+                    self.pwms[num]['minimumAngle'] = angle
+                elif cmd == 'maximumAngle':
+                    angle = kwargs.get("val")
+                    self.pwm_l[num - 1].ChangeAngles(self.pwm_l[num - 1].min_angle, angle)
+                    self.pwms[num]['maximumAngle'] = angle
+                elif cmd == 'change_angles':
+                    minangle = kwargs.get("minangle")
+                    maxangle = kwargs.get("maxangle")
+                    self.pwms[num]['maximumAngle'] = maxangle
+                    self.pwms[num]['minimumAngle'] = minangle
+                    self.pwm_l[num - 1].ChangeAngles(minangle, maxangle)
+                else:
+                    print "Didn't recognize %r"%cmd
+
+
+    def _tone_service(self, *args, **kwargs):
+
+        num = kwargs.get("num", 1)
+        cmd = kwargs.get("cmd", None)
+
+        if cmd == 'start':
+            if self.pwms[num]["Type"] == None:
+                self.pwm_l[num - 1] = Tone(num - 1)
+                self.pwm_l[num - 1].SetVolume(self.pwms[num]['volume'])
+                self.pwm_l[num - 1].SetNote(self.pwms[num]['note'], self.pwms[num]['octave'])
+                self.pwm_l[num - 1].Start()
+                self.pwms[num]["Type"] = "Tone"
+        elif cmd == 'stop':
+            if self.pwms[num]["Type"] == "Tone":
+                self.pwm_l[num - 1].Stop()
+                self.pwm_l[num - 1] = None
+                self.pwms[num]["Type"] = None
+        else:
+            if self.pwms[num]["Type"] == "Tone":
+                val = kwargs.get(cmd)
+                print val
+                self.pwms[num][cmd] = val
+                if cmd == 'volume':
+                    self.pwm_l[num - 1].SetVolume(val)
+                elif cmd == 'note':
+
+                    print self.pwms[num]['note'], type(self.pwms[num]['note'])
+                    self.pwm_l[num - 1].SetNote(val, self.pwms[num]['octave'])
+
+
+    def _pwm_service(self):
+        pass
+
+        
+
+
+class Scratch_Extension(threading.Thread):
+    def __init__(self, extension):
+        threading.Thread.__init__(self)
+        self.extension = extension
+    def run(self):
+        self.extension.run_forever(debug = False)
+
+
 
 if __name__ == '__main__':
     PiSoC('PC', log_level = 'debug')
-    extension.run_forever(debug=False)
+
+    descriptor = Descriptor(
+    name = "PiSoC",
+    port = 42001,
+    blocks = [
+
+    Block('capsenseTouched', 'predicate', 'touch sensor %m.num touched?'),
+    Block('pinState', 'predicate', 'pin %m.dig_num is on?'),
+    Block('pinBlink', 'command', 'blink pin %m.dig_num'),
+    Block('pinConfig', 'command', 'set pin %m.dig_num as %m.config'),
+    Block('setPin', 'command', 'turn pin %m.dig_num %m.state'),
+    Block('pinVal', 'reporter', 'pin %m.dig_num value'),
+    Block('NeoPixelcmd', 'command', '%m.neo_cmd NeoPixel screen'),
+    Block('SetNeoPixel', 'command', 'set NeoPixel %m.rows %m.columns'),
+    Block('NeoPixelRow', 'command', 'draw NeoPixel row %m.rows'),
+    Block('NeoPixelColumn', 'command', 'draw NeoPixel column %m.columns'),
+    Block('NeoPixelDim', 'command', 'set NeoPixel brightness to %m.brightness'),
+    Block('setNeoPixelcolor2', 'command', 'set NeoPixel color to %c'),
+    Block('joystickRead_x_axis', 'reporter', 'Controller joystick x %m.analog'),
+    Block('joystickRead_y_axis', 'reporter', 'Controller joystick y %m.analog'),
+    Block('controller_buttons_read', 'predicate', 'Controller button %m.controller %m.controller_action ?'),
+    Block('getTone', 'reporter', 'tone %m.num %m.tone value'),
+    Block('setTone', 'command', 'tell tone %m.num to %m.ranger'),
+    Block('setToneVal', 'command', 'set tone %m.num note to %m.notes'),
+    Block('setToneOctave', 'command', 'set tone %m.num octave to %m.octaves'),
+    Block('setToneVolume', 'command', 'set tone %m.num volume to %m.volume'),
+    Block('getServo', 'reporter', 'servo %m.num %m.servo value'),
+    Block('setServo', 'command', 'tell servo %m.num to %m.servo_c'),
+    Block('setServoVal', 'command', 'set servo %m.num %m.servo to %n'),
+    Block('setServoAngles', 'command', 'set servo %m.num angle range from %n to %n'),
+    Block('rangeFinderSet', 'command', '%m.ranger distance measurement'),
+    Block('rangeFinderReport', 'reporter', 'ranger finder %m.dist')
+
+    ],
+    menus = menu_items,
+)
+    
+
+    extension = Extension(scratch_SoC, descriptor)
+    commands = Queue.Queue(maxsize=1000)
+    scratch_handler = Scratch_Extension(extension)
+    pisoc_data = PiSoC_Data()
+
+
+    pisoc_data.daemon = True
+    scratch_handler.daemon = True
+
+    scratch_handler.start()
+    pisoc_data.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        exit()
+
+
+    
