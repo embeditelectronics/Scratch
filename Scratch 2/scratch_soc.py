@@ -31,7 +31,7 @@ class ErrorCatcher(type):
 class scratch_SoC:
     #__metaclass__ = ErrorCatcher
     def __init__(self):
-        self.color_ = 0
+        pass
 
     def _problem(self):
         if not pisoc_data.connected_:
@@ -499,12 +499,12 @@ if __name__ == '__main__':
     Block('rangeFinderReport', 'reporter', 'ranger finder %m.dist')
 
     ],
-    menus = menu_items,
+    menus = menu_items
 )
     
 
     extension = Extension(scratch_SoC, descriptor)
-    commands = Queue.Queue(maxsize=1000)
+    commands = Queue.Queue(maxsize=100)
     scratch_handler = Scratch_Extension(extension)
     pisoc_data = PiSoC_Data()
 
