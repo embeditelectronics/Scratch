@@ -245,7 +245,7 @@ class PiSoC_Data(threading.Thread):
     def initialize_data(self):
 
         #Restart range finder.
-        self.ranger = RangeFinder([6, 6], trigger = [6, 7], timeout_us= 50000, poll_frequency = 10)
+        self.ranger = RangeFinder(DigitalPin(6, 6), DigitalPin(6, 7), timeout_us= 50000, poll_frequency = 10)
 
         #Reconfigure JoyStick shield
         for button in self.controller_digital['pins']:
@@ -463,7 +463,7 @@ menu_items = dict(
 
 
 if __name__ == '__main__':
-    PiSoC('PC', log_level = 'debug')
+    PiSoC(log_level = 'debug')
 
     descriptor = Descriptor(
     name = "PiSoC",
